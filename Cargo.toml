@@ -1,0 +1,29 @@
+[package]
+name = "alt-graph-physics"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Deterministic constrained-energy layout and routing for interactive graph canvases"
+repository = "https://github.com/alt-infra/alt-physics"
+rust-version = "1.85"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+argmin = { version = "0.11", default-features = false }
+argmin-math = { version = "0.5", features = ["nalgebra_latest"] }
+nalgebra = "0.34"
+petgraph = "0.8"
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = "2.0"
+
+[dev-dependencies]
+approx = "0.5"
+criterion = "0.7"
+serde_json = "1.0"
+
+[[bench]]
+name = "layout"
+harness = false
