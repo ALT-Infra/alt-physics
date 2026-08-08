@@ -4,7 +4,10 @@ use argmin::core::{CostFunction, Error as ArgminError, Gradient};
 use nalgebra::DVector;
 
 use crate::geometry::segments_intersect;
-use crate::{Edge, EdgeKind, LayoutConfig, LayoutError, LayoutInput, Node, NodeId, Pin, Point};
+use crate::{
+    Axis, AxisConstraint, Edge, EdgeKind, LayoutConfig, LayoutError, LayoutInput, Node, NodeId,
+    Pin, Point,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct EnergyBreakdown {
@@ -17,6 +20,7 @@ pub(crate) struct EnergyBreakdown {
 pub(crate) struct CompiledProblem {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub constraints: Vec<AxisConstraint>,
     pub index: BTreeMap<NodeId, usize>,
     pub free_slot: Vec<Option<usize>>,
     pub fixed: Vec<Option<Point>>,
@@ -85,6 +89,56 @@ impl CompiledProblem {
             }
         }
 
+        let constraints = input.constraints.clone();
+        for constraint in &constraints {
+            match constraint {
+                AxisConstraint::Position {
+                    node,
+                    coordinate,
+                    weight,
+                    ..
+                } => {
+                    validate_constraint_nodes(&index, &[*node])?;
+                    validate_constraint_scalars(&[*coordinate], *weight)?;
+                }
+                AxisConstraint::Offset {
+                    source,
+                    target,
+                    delta,
+                    weight,
+                    ..
+                } => {
+                    validate_constraint_nodes(&index, &[*source, *target])?;
+                    validate_constraint_scalars(&[*delta], *weight)?;
+                    if source == target {
+                        return Err(LayoutError::InvalidConfig(
+                            "axis constraint cannot relate a node to itself",
+                        ));
+                    }
+                }
+                AxisConstraint::Separation {
+                    before,
+                    after,
+                    minimum,
+                    weight,
+                    ..
+                } => {
+                    validate_constraint_nodes(&index, &[*before, *after])?;
+                    validate_constraint_scalars(&[*minimum], *weight)?;
+                    if before == after {
+                        return Err(LayoutError::InvalidConfig(
+                            "axis constraint cannot relate a node to itself",
+                        ));
+                    }
+                    if *minimum < 0.0 {
+                        return Err(LayoutError::InvalidConfig(
+                            "axis separation cannot be negative",
+                        ));
+                    }
+                }
+            }
+        }
+
         let mut free_slot = vec![None; nodes.len()];
         let mut fixed = vec![None; nodes.len()];
         let mut slot = 0;
@@ -105,6 +159,7 @@ impl CompiledProblem {
         Ok(Self {
             nodes,
             edges,
+            constraints,
             index,
             free_slot,
             fixed,
@@ -203,6 +258,17 @@ impl CompiledProblem {
                     2.0 * weight * residual,
                 );
             }
+        }
+
+        for constraint in &self.constraints {
+            apply_constraint_energy(
+                constraint,
+                &self.index,
+                &self.free_slot,
+                &positions,
+                &mut cost,
+                &mut gradient,
+            );
         }
 
         // Crossing edges repel at their intersection basin. This is a local,
@@ -347,6 +413,103 @@ impl CompiledProblem {
             }
         }
         cost
+    }
+}
+
+fn validate_constraint_nodes(
+    index: &BTreeMap<NodeId, usize>,
+    nodes: &[NodeId],
+) -> Result<(), LayoutError> {
+    if nodes.iter().any(|node| !index.contains_key(node)) {
+        return Err(LayoutError::InvalidConfig(
+            "axis constraint references a missing node",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_constraint_scalars(values: &[f64], weight: f64) -> Result<(), LayoutError> {
+    if values.iter().any(|value| !value.is_finite()) || !weight.is_finite() || weight <= 0.0 {
+        return Err(LayoutError::InvalidConfig("invalid axis constraint"));
+    }
+    Ok(())
+}
+
+fn axis_value(point: Point, axis: Axis) -> f64 {
+    match axis {
+        Axis::Horizontal => point.x,
+        Axis::Vertical => point.y,
+    }
+}
+
+fn add_axis_gradient(
+    slots: &[Option<usize>],
+    gradient: &mut Option<&mut DVector<f64>>,
+    node: usize,
+    axis: Axis,
+    value: f64,
+) {
+    let Some(slot) = slots[node] else {
+        return;
+    };
+    let Some(gradient) = gradient.as_deref_mut() else {
+        return;
+    };
+    gradient[2 * slot + usize::from(axis == Axis::Vertical)] += value;
+}
+
+fn apply_constraint_energy(
+    constraint: &AxisConstraint,
+    index: &BTreeMap<NodeId, usize>,
+    slots: &[Option<usize>],
+    positions: &[Point],
+    cost: &mut f64,
+    gradient: &mut Option<&mut DVector<f64>>,
+) {
+    match *constraint {
+        AxisConstraint::Position {
+            node,
+            axis,
+            coordinate,
+            weight,
+        } => {
+            let node = index[&node];
+            let residual = axis_value(positions[node], axis) - coordinate;
+            *cost += weight * residual * residual;
+            add_axis_gradient(slots, gradient, node, axis, 2.0 * weight * residual);
+        }
+        AxisConstraint::Offset {
+            source,
+            target,
+            axis,
+            delta,
+            weight,
+        } => {
+            let source = index[&source];
+            let target = index[&target];
+            let residual =
+                axis_value(positions[target], axis) - axis_value(positions[source], axis) - delta;
+            *cost += weight * residual * residual;
+            add_axis_gradient(slots, gradient, source, axis, -2.0 * weight * residual);
+            add_axis_gradient(slots, gradient, target, axis, 2.0 * weight * residual);
+        }
+        AxisConstraint::Separation {
+            before,
+            after,
+            axis,
+            minimum,
+            weight,
+        } => {
+            let before = index[&before];
+            let after = index[&after];
+            let actual = axis_value(positions[after], axis) - axis_value(positions[before], axis);
+            let violation = minimum - actual;
+            if violation > 0.0 {
+                *cost += weight * violation * violation;
+                add_axis_gradient(slots, gradient, before, axis, 2.0 * weight * violation);
+                add_axis_gradient(slots, gradient, after, axis, -2.0 * weight * violation);
+            }
+        }
     }
 }
 

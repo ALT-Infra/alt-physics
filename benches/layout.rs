@@ -26,6 +26,7 @@ fn graph(count: usize) -> LayoutInput {
     LayoutInput {
         nodes,
         edges,
+        constraints: vec![],
         config: LayoutConfig::default(),
     }
 }

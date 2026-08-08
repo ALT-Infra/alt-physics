@@ -8,8 +8,8 @@ use nalgebra::DVector;
 
 use crate::{
     energy::CompiledProblem, geometry::Rect, initialize::initialize, metrics::measure,
-    routing::route_edges, LayoutError, LayoutInput, LayoutOutput, NodeId, NodePlacement, Pin,
-    Point, SolverDiagnostics,
+    routing::route_edges, Axis, AxisConstraint, LayoutError, LayoutInput, LayoutOutput, NodeId,
+    NodePlacement, Pin, Point, SolverDiagnostics,
 };
 
 pub fn layout(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
@@ -34,7 +34,7 @@ pub fn layout(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
         optimize(&problem, initial_params)?
     };
     let mut positions = problem.positions(&params);
-    let projected_pairs = project_non_overlap(&problem, &mut positions);
+    let projected_pairs = project_geometry(&problem, &mut positions);
     params = problem.params_from_positions(&positions);
 
     // A short polish restores spring and hierarchy quality after exact projection.
@@ -46,7 +46,7 @@ pub fn layout(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
         )?;
         params = polished.0;
         positions = problem.positions(&params);
-        project_non_overlap(&problem, &mut positions);
+        project_geometry(&problem, &mut positions);
         params = problem.params_from_positions(&positions);
     }
 
@@ -116,10 +116,10 @@ fn optimize_with_limit(
     ))
 }
 
-fn project_non_overlap(problem: &CompiledProblem, positions: &mut [Point]) -> usize {
+fn project_geometry(problem: &CompiledProblem, positions: &mut [Point]) -> usize {
     let mut projected = 0;
     for _ in 0..problem.config.projection_passes {
-        let mut changed = false;
+        let mut changed = project_axis_separations(problem, positions, &mut projected);
         for left in 0..positions.len() {
             for right in left + 1..positions.len() {
                 let a = Rect {
@@ -178,6 +178,61 @@ fn project_non_overlap(problem: &CompiledProblem, positions: &mut [Point]) -> us
         }
     }
     projected
+}
+
+fn project_axis_separations(
+    problem: &CompiledProblem,
+    positions: &mut [Point],
+    projected: &mut usize,
+) -> bool {
+    let mut changed = false;
+    for constraint in &problem.constraints {
+        let AxisConstraint::Separation {
+            before,
+            after,
+            axis,
+            minimum,
+            ..
+        } = *constraint
+        else {
+            continue;
+        };
+        let before = problem.index[&before];
+        let after = problem.index[&after];
+        let current = coordinate(positions[after], axis) - coordinate(positions[before], axis);
+        let violation = minimum - current;
+        if violation <= 1e-8 {
+            continue;
+        }
+        let before_fixed = matches!(problem.nodes[before].pin, Pin::Fixed(_));
+        let after_fixed = matches!(problem.nodes[after].pin, Pin::Fixed(_));
+        match (before_fixed, after_fixed) {
+            (true, true) => continue,
+            (true, false) => move_along(&mut positions[after], axis, violation),
+            (false, true) => move_along(&mut positions[before], axis, -violation),
+            (false, false) => {
+                move_along(&mut positions[before], axis, -violation * 0.5);
+                move_along(&mut positions[after], axis, violation * 0.5);
+            }
+        }
+        *projected += 1;
+        changed = true;
+    }
+    changed
+}
+
+fn coordinate(point: Point, axis: Axis) -> f64 {
+    match axis {
+        Axis::Horizontal => point.x,
+        Axis::Vertical => point.y,
+    }
+}
+
+fn move_along(point: &mut Point, axis: Axis, amount: f64) {
+    match axis {
+        Axis::Horizontal => point.x += amount,
+        Axis::Vertical => point.y += amount,
+    }
 }
 
 fn stable_sign(value: f64, left: u64, right: u64) -> f64 {

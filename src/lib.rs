@@ -14,7 +14,8 @@ mod solver;
 
 pub use error::LayoutError;
 pub use model::{
-    Edge, EdgeId, EdgeKind, LayoutConfig, LayoutInput, LayoutMetrics, LayoutOutput, Node, NodeId,
-    NodePlacement, Pin, Point, Port, Route, Side, Size, SolverDiagnostics,
+    Axis, AxisConstraint, Edge, EdgeId, EdgeKind, LayoutConfig, LayoutInput, LayoutMetrics,
+    LayoutOutput, Node, NodeId, NodePlacement, Pin, Point, Port, Route, Side, Size,
+    SolverDiagnostics,
 };
 pub use solver::layout;

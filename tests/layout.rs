@@ -1,5 +1,6 @@
 use alt_graph_physics::{
-    layout, Edge, EdgeKind, LayoutConfig, LayoutInput, Node, Pin, Point, Port, Size,
+    layout, Axis, AxisConstraint, Edge, EdgeKind, LayoutConfig, LayoutInput, Node, Pin, Point,
+    Port, Size,
 };
 
 fn node(id: u64) -> Node {
@@ -47,6 +48,7 @@ fn mixed_directed_and_peer_graph_is_deterministic_and_clear() {
                 target_port: Port::Free,
             },
         ],
+        constraints: vec![],
         config: LayoutConfig::default(),
     };
     let first = layout(&input).unwrap();
@@ -65,6 +67,7 @@ fn fixed_positions_are_exact() {
     let input = LayoutInput {
         nodes: vec![left, node(2)],
         edges: vec![directed(1, 1, 2)],
+        constraints: vec![],
         config: LayoutConfig::default(),
     };
     let output = layout(&input).unwrap();
@@ -90,6 +93,7 @@ fn route_avoids_a_fixed_rectangular_obstacle() {
             source_port: Port::Free,
             target_port: Port::Free,
         }],
+        constraints: vec![],
         config: LayoutConfig::default(),
     };
     let output = layout(&input).unwrap();
@@ -102,6 +106,7 @@ fn invalid_endpoint_is_rejected() {
     let input = LayoutInput {
         nodes: vec![node(1)],
         edges: vec![directed(1, 1, 99)],
+        constraints: vec![],
         config: LayoutConfig::default(),
     };
     assert!(layout(&input).is_err());
@@ -112,6 +117,7 @@ fn disconnected_nodes_remain_bounded_and_separated() {
     let input = LayoutInput {
         nodes: vec![node(1), node(2), node(3)],
         edges: vec![],
+        constraints: vec![],
         config: LayoutConfig::default(),
     };
     let output = layout(&input).unwrap();
@@ -120,4 +126,44 @@ fn disconnected_nodes_remain_bounded_and_separated() {
         .placements
         .values()
         .all(|placement| placement.center.x.abs() < 1_000.0 && placement.center.y.abs() < 1_000.0));
+}
+
+#[test]
+fn axis_constraints_do_not_create_edges_and_hard_separation_survives_projection() {
+    let input = LayoutInput {
+        nodes: vec![node(1), node(2), node(3)],
+        edges: vec![directed(1, 1, 2)],
+        constraints: vec![
+            AxisConstraint::Position {
+                node: 1,
+                axis: Axis::Vertical,
+                coordinate: 0.0,
+                weight: 20.0,
+            },
+            AxisConstraint::Offset {
+                source: 1,
+                target: 2,
+                axis: Axis::Vertical,
+                delta: 180.0,
+                weight: 20.0,
+            },
+            AxisConstraint::Separation {
+                before: 1,
+                after: 3,
+                axis: Axis::Vertical,
+                minimum: 100.0,
+                weight: 20.0,
+            },
+        ],
+        config: LayoutConfig::default(),
+    };
+    let output = layout(&input).unwrap();
+    assert_eq!(
+        output.routes.len(),
+        1,
+        "constraints manufactured rendered edges"
+    );
+    assert!(output.placements[&3].center.y - output.placements[&1].center.y >= 100.0 - 1e-6);
+    let offset = output.placements[&2].center.y - output.placements[&1].center.y;
+    assert!((offset - 180.0).abs() < 4.0, "vertical offset was {offset}");
 }

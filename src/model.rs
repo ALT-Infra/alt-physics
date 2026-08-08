@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 pub type NodeId = u64;
 pub type EdgeId = u64;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Point {
@@ -102,6 +109,37 @@ pub struct Edge {
     pub target_port: Port,
 }
 
+/// A geometric relationship that affects placement without manufacturing a
+/// rendered graph edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum AxisConstraint {
+    /// Prefer one coordinate for a node.
+    Position {
+        node: NodeId,
+        axis: Axis,
+        coordinate: f64,
+        weight: f64,
+    },
+    /// Prefer `target - source == delta` along one axis.
+    Offset {
+        source: NodeId,
+        target: NodeId,
+        axis: Axis,
+        delta: f64,
+        weight: f64,
+    },
+    /// Require `after - before >= minimum` along one axis. The inequality is
+    /// both an energy term and an exact post-optimization projection.
+    Separation {
+        before: NodeId,
+        after: NodeId,
+        axis: Axis,
+        minimum: f64,
+        weight: f64,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LayoutConfig {
@@ -145,6 +183,8 @@ impl Default for LayoutConfig {
 pub struct LayoutInput {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub constraints: Vec<AxisConstraint>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub config: LayoutConfig,
 }
