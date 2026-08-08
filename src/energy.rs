@@ -116,6 +116,20 @@ impl CompiledProblem {
                         ));
                     }
                 }
+                AxisConstraint::Alignment {
+                    first,
+                    second,
+                    weight,
+                    ..
+                } => {
+                    validate_constraint_nodes(&index, &[*first, *second])?;
+                    validate_constraint_scalars(&[], *weight)?;
+                    if first == second {
+                        return Err(LayoutError::InvalidConfig(
+                            "axis constraint cannot relate a node to itself",
+                        ));
+                    }
+                }
                 AxisConstraint::Separation {
                     before,
                     after,
@@ -493,6 +507,19 @@ fn apply_constraint_energy(
             add_axis_gradient(slots, gradient, source, axis, -2.0 * weight * residual);
             add_axis_gradient(slots, gradient, target, axis, 2.0 * weight * residual);
         }
+        AxisConstraint::Alignment {
+            first,
+            second,
+            axis,
+            weight,
+        } => {
+            let first = index[&first];
+            let second = index[&second];
+            let residual = axis_value(positions[second], axis) - axis_value(positions[first], axis);
+            *cost += weight * residual * residual;
+            add_axis_gradient(slots, gradient, first, axis, -2.0 * weight * residual);
+            add_axis_gradient(slots, gradient, second, axis, 2.0 * weight * residual);
+        }
         AxisConstraint::Separation {
             before,
             after,
@@ -616,6 +643,9 @@ fn validate_config(config: &LayoutConfig) -> Result<(), LayoutError> {
         return Err(LayoutError::InvalidConfig(
             "max_iterations must be positive",
         ));
+    }
+    if config.restarts == 0 {
+        return Err(LayoutError::InvalidConfig("restarts must be positive"));
     }
     if config.history_size == 0 {
         return Err(LayoutError::InvalidConfig("history_size must be positive"));

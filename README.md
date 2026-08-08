@@ -3,7 +3,7 @@
 ALT Physics is a provider- and UI-neutral Rust engine for deterministic graph
 geometry. It accepts labeled rectangles, directed displacement preferences,
 symmetric relationships, ports, prior positions, hard pins, and generic
-one-axis position/offset/separation constraints; it returns node centers,
+one-axis position/offset/alignment/separation constraints; it returns node centers,
 obstacle-safe routes, metrics, and solver diagnostics.
 
 The engine owns mathematics and geometry only. It does not know what a Router,
@@ -22,8 +22,12 @@ their own semantics into constraints. Renderers consume the resulting geometry.
    then polish without moving fixed nodes.
 5. Resolve free/fixed boundary ports and route around expanded rectangular
    obstacles through a deterministic visibility graph.
-6. Report energy, stress, hierarchy error, overlaps, crossings, crossing angle,
-   route length, bends, and solver behavior.
+6. Compare deterministic initial conditions lexicographically—overlap,
+   crossings, crossing angle, bends, length, then energy terms—rather than
+   pretending the lowest scalar energy is always the clearest drawing.
+7. Report energy, stress, hierarchy error, overlaps, crossings, crossing and
+   incident-edge angles, physical extent, route length, bends, and solver
+   behavior.
 
 The public API is in [`src/model.rs`](src/model.rs). The evidence and rejected
 alternatives are recorded in [`RESEARCH.md`](RESEARCH.md).

@@ -13,6 +13,36 @@ use crate::{
 };
 
 pub fn layout(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
+    let attempts = if input.nodes.len() < 3
+        || input
+            .nodes
+            .iter()
+            .all(|node| matches!(node.pin, Pin::Fixed(_)))
+    {
+        1
+    } else {
+        input.config.restarts
+    };
+    let mut best: Option<(usize, LayoutOutput)> = None;
+    for restart in 0..attempts {
+        let mut candidate_input = input.clone();
+        candidate_input.config.seed = restart_seed(input.config.seed, restart);
+        candidate_input.config.restarts = 1;
+        let candidate = layout_once(&candidate_input)?;
+        if best
+            .as_ref()
+            .is_none_or(|(_, current)| output_is_better(&candidate, current))
+        {
+            best = Some((restart, candidate));
+        }
+    }
+    let (selected_restart, mut output) = best.expect("at least one restart is required");
+    output.diagnostics.attempted_restarts = attempts;
+    output.diagnostics.selected_restart = selected_restart;
+    Ok(output)
+}
+
+fn layout_once(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
     let problem = CompiledProblem::new(input)?;
     if problem.nodes.is_empty() {
         return Ok(LayoutOutput {
@@ -74,10 +104,64 @@ pub fn layout(input: &LayoutInput) -> Result<LayoutOutput, LayoutError> {
         diagnostics: SolverDiagnostics {
             iterations,
             termination,
+            attempted_restarts: 1,
+            selected_restart: 0,
             projected_pairs,
             routed_obstacles,
         },
     })
+}
+
+fn restart_seed(seed: u64, restart: usize) -> u64 {
+    if restart == 0 {
+        return seed;
+    }
+    let mut value = seed.wrapping_add((restart as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn output_is_better(candidate: &LayoutOutput, current: &LayoutOutput) -> bool {
+    let candidate_angle = candidate
+        .metrics
+        .minimum_crossing_angle_degrees
+        .unwrap_or(90.0);
+    let current_angle = current
+        .metrics
+        .minimum_crossing_angle_degrees
+        .unwrap_or(90.0);
+    let candidate_incident_angle = candidate
+        .metrics
+        .minimum_incident_angle_degrees
+        .unwrap_or(180.0);
+    let current_incident_angle = current
+        .metrics
+        .minimum_incident_angle_degrees
+        .unwrap_or(180.0);
+    candidate
+        .metrics
+        .overlaps
+        .cmp(&current.metrics.overlaps)
+        .then_with(|| candidate.metrics.crossings.cmp(&current.metrics.crossings))
+        .then_with(|| current_angle.total_cmp(&candidate_angle))
+        .then_with(|| current_incident_angle.total_cmp(&candidate_incident_angle))
+        .then_with(|| candidate.metrics.bends.cmp(&current.metrics.bends))
+        .then_with(|| {
+            candidate
+                .metrics
+                .total_edge_length
+                .total_cmp(&current.metrics.total_edge_length)
+        })
+        .then_with(|| {
+            candidate
+                .metrics
+                .hierarchy_error
+                .total_cmp(&current.metrics.hierarchy_error)
+        })
+        .then_with(|| candidate.metrics.stress.total_cmp(&current.metrics.stress))
+        .then_with(|| candidate.metrics.energy.total_cmp(&current.metrics.energy))
+        .is_lt()
 }
 
 fn optimize(
@@ -118,8 +202,11 @@ fn optimize_with_limit(
 
 fn project_geometry(problem: &CompiledProblem, positions: &mut [Point]) -> usize {
     let mut projected = 0;
+    let horizontal_alignments = alignment_components(problem, Axis::Horizontal);
+    let vertical_alignments = alignment_components(problem, Axis::Vertical);
     for _ in 0..problem.config.projection_passes {
-        let mut changed = project_axis_separations(problem, positions, &mut projected);
+        let mut changed = project_axis_alignments(problem, positions, &mut projected);
+        changed |= project_axis_separations(problem, positions, &mut projected);
         for left in 0..positions.len() {
             for right in left + 1..positions.len() {
                 let a = Rect {
@@ -139,7 +226,16 @@ fn project_geometry(problem: &CompiledProblem, positions: &mut [Point]) -> usize
                     (a.size.width + b.size.width) * 0.5 + problem.config.clearance - dx.abs();
                 let need_y =
                     (a.size.height + b.size.height) * 0.5 + problem.config.clearance - dy.abs();
-                let (move_x, move_y) = if need_x <= need_y {
+                let same_horizontal = horizontal_alignments[left] == horizontal_alignments[right];
+                let same_vertical = vertical_alignments[left] == vertical_alignments[right];
+                let separate_horizontally = if same_vertical && !same_horizontal {
+                    true
+                } else if same_horizontal && !same_vertical {
+                    false
+                } else {
+                    need_x <= need_y
+                };
+                let (move_x, move_y) = if separate_horizontally {
                     (
                         need_x * stable_sign(dx, problem.nodes[left].id, problem.nodes[right].id),
                         0.0,
@@ -177,7 +273,87 @@ fn project_geometry(problem: &CompiledProblem, positions: &mut [Point]) -> usize
             break;
         }
     }
+    // Inequality projection may move members of one equality component by
+    // slightly different amounts on the final pass. Equality is the stricter
+    // contract, and aligned overlap pairs were already separated along the
+    // orthogonal axis above, so finish by restoring it exactly.
+    project_axis_alignments(problem, positions, &mut projected);
     projected
+}
+
+fn alignment_components(problem: &CompiledProblem, axis: Axis) -> Vec<usize> {
+    let mut parents: Vec<_> = (0..problem.nodes.len()).collect();
+    for constraint in &problem.constraints {
+        let AxisConstraint::Alignment {
+            first,
+            second,
+            axis: constraint_axis,
+            ..
+        } = *constraint
+        else {
+            continue;
+        };
+        if constraint_axis != axis {
+            continue;
+        }
+        let first = find_component(&parents, problem.index[&first]);
+        let second = find_component(&parents, problem.index[&second]);
+        let representative = first.min(second);
+        parents[first] = representative;
+        parents[second] = representative;
+    }
+    (0..parents.len())
+        .map(|index| find_component(&parents, index))
+        .collect()
+}
+
+fn find_component(parents: &[usize], mut index: usize) -> usize {
+    while parents[index] != index {
+        index = parents[index];
+    }
+    index
+}
+
+fn project_axis_alignments(
+    problem: &CompiledProblem,
+    positions: &mut [Point],
+    projected: &mut usize,
+) -> bool {
+    let mut changed = false;
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        let components = alignment_components(problem, axis);
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (index, component) in components.into_iter().enumerate() {
+            groups.entry(component).or_default().push(index);
+        }
+        for group in groups.values().filter(|group| group.len() > 1) {
+            let target = group
+                .iter()
+                .copied()
+                .find(|&index| matches!(problem.nodes[index].pin, Pin::Fixed(_)))
+                .map(|index| coordinate(positions[index], axis))
+                .unwrap_or_else(|| {
+                    group
+                        .iter()
+                        .map(|&index| coordinate(positions[index], axis))
+                        .sum::<f64>()
+                        / group.len() as f64
+                });
+            for &index in group {
+                if matches!(problem.nodes[index].pin, Pin::Fixed(_)) {
+                    continue;
+                }
+                let delta = target - coordinate(positions[index], axis);
+                if delta.abs() <= 1e-8 {
+                    continue;
+                }
+                move_along(&mut positions[index], axis, delta);
+                *projected += 1;
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 fn project_axis_separations(

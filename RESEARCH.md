@@ -34,10 +34,34 @@ of universal beauty.
 ## Human-facing objectives
 
 Controlled graph-reading studies consistently make crossings, path continuity,
-bends, and crossing angle load-bearing. Symmetry, mental-map preservation, and
-compactness are task-dependent; no scalar average is allowed to stand in for
-visual quality. ALT Physics therefore returns a metric vector and deterministic
-geometry rather than a single undocumented “beauty score.”
+bends, crossing angle, and incident-edge angular resolution load-bearing.
+Gestalt evidence adds proximity, continuation, connectedness, contour,
+orientation, symmetry, and stable figure-ground grouping, but those principles
+must agree with semantic structure rather than merely decorate it. Symmetry,
+mental-map preservation, compactness, and density judgment remain task-dependent;
+no scalar average is allowed to stand in for visual quality. ALT Physics
+therefore returns a metric vector and deterministic geometry rather than a
+single undocumented “beauty score.” Deterministic multi-start selection follows
+that same ordering: a lower optimizer energy cannot purchase an extra crossing
+or a worse locally traceable junction.
+
+The UI layer has separate obligations which do not belong in this crate. A
+multi-scale image should expose the same Router/Lead/contributor structure at
+overview, branch, and label scales; explicit group contours must reflect actual
+possibly-overlapping pools; visual balance accounts for weight, not symmetry
+alone; interaction may focus a subgraph without falsifying the stored graph.
+Geometry metrics are therefore necessary evidence, never a substitute for
+rendered-image audits and task-based inspection.
+
+Primary perception and aesthetics sources include Bennett et al., *The
+Aesthetics of Graph Visualization*; Wattenberg and Fisher, *A Multi-Scale Model
+of Perceptual Organization in Information Graphics*; Rosenholtz et al.,
+*Designing Interfaces and Graphics with Intuitive Perceptual Grouping*; Zhao et
+al., *Understanding and Designing Visual Information Flows*; and Heinrich,
+*Diagram Aesthetics: Beauty and the Sublime in—and through—Diagrams*. Together
+they reject the false choice between legibility and beauty: a successful
+diagram is a calm, perceivable gestalt whose operative structure can reveal
+change without dissolving into visual noise.
 
 ## Routing
 

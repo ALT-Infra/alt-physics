@@ -129,6 +129,14 @@ pub enum AxisConstraint {
         delta: f64,
         weight: f64,
     },
+    /// Require two nodes to share one coordinate. Unlike [`Self::Offset`],
+    /// this equality is projected exactly after continuous optimization.
+    Alignment {
+        first: NodeId,
+        second: NodeId,
+        axis: Axis,
+        weight: f64,
+    },
     /// Require `after - before >= minimum` along one axis. The inequality is
     /// both an energy term and an exact post-optimization projection.
     Separation {
@@ -144,6 +152,10 @@ pub enum AxisConstraint {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LayoutConfig {
     pub seed: u64,
+    /// Deterministic initial conditions evaluated before lexicographic
+    /// selection. One preserves minimum latency; several improve difficult
+    /// local minima without making the output random.
+    pub restarts: usize,
     pub max_iterations: u64,
     pub history_size: usize,
     pub gradient_tolerance: f64,
@@ -162,6 +174,7 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             seed: 0xA17_2026,
+            restarts: 4,
             max_iterations: 280,
             history_size: 12,
             gradient_tolerance: 1e-6,
@@ -213,8 +226,17 @@ pub struct LayoutMetrics {
     pub overlaps: usize,
     pub crossings: usize,
     pub minimum_crossing_angle_degrees: Option<f64>,
+    /// Smallest angle between two routes incident to the same node. A drawing
+    /// can have no crossings and still be difficult to trace when adjacent
+    /// routes leave a node almost on top of one another.
+    pub minimum_incident_angle_degrees: Option<f64>,
     pub total_edge_length: f64,
     pub bends: usize,
+    /// Axis-aligned extent of all placed rectangles. Viewport composition is
+    /// renderer-owned, but exposing the physical extent lets callers audit
+    /// compactness and aspect without reconstructing geometry.
+    pub drawing_width: f64,
+    pub drawing_height: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -222,6 +244,8 @@ pub struct LayoutMetrics {
 pub struct SolverDiagnostics {
     pub iterations: u64,
     pub termination: String,
+    pub attempted_restarts: usize,
+    pub selected_restart: usize,
     pub projected_pairs: usize,
     pub routed_obstacles: usize,
 }
