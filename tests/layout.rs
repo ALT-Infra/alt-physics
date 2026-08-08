@@ -106,3 +106,18 @@ fn invalid_endpoint_is_rejected() {
     };
     assert!(layout(&input).is_err());
 }
+
+#[test]
+fn disconnected_nodes_remain_bounded_and_separated() {
+    let input = LayoutInput {
+        nodes: vec![node(1), node(2), node(3)],
+        edges: vec![],
+        config: LayoutConfig::default(),
+    };
+    let output = layout(&input).unwrap();
+    assert_eq!(output.metrics.overlaps, 0);
+    assert!(output
+        .placements
+        .values()
+        .all(|placement| placement.center.x.abs() < 1_000.0 && placement.center.y.abs() < 1_000.0));
+}

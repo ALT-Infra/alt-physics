@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use argmin::core::{CostFunction, Error as ArgminError, Gradient};
 use nalgebra::DVector;
 
+use crate::geometry::segments_intersect;
 use crate::{Edge, EdgeKind, LayoutConfig, LayoutError, LayoutInput, Node, NodeId, Pin, Point};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -156,6 +157,7 @@ impl CompiledProblem {
                 out.hierarchy += self.config.hierarchy_weight * edge.weight * residual * residual;
             }
         }
+
         out.total = self.evaluate(params, None);
         out
     }
@@ -200,6 +202,57 @@ impl CompiledProblem {
                     0.0,
                     2.0 * weight * residual,
                 );
+            }
+        }
+
+        // Crossing edges repel at their intersection basin. This is a local,
+        // differentiable surrogate within each fixed crossing topology; exact
+        // crossing counts remain a separately reported metric.
+        for left in 0..self.edges.len() {
+            let a = &self.edges[left];
+            for b in &self.edges[left + 1..] {
+                if a.source == b.source
+                    || a.source == b.target
+                    || a.target == b.source
+                    || a.target == b.target
+                {
+                    continue;
+                }
+                let ai = self.index[&a.source];
+                let aj = self.index[&a.target];
+                let bi = self.index[&b.source];
+                let bj = self.index[&b.target];
+                if segments_intersect(positions[ai], positions[aj], positions[bi], positions[bj])
+                    .is_none()
+                {
+                    continue;
+                }
+                let midpoint_a = Point::new(
+                    (positions[ai].x + positions[aj].x) * 0.5,
+                    (positions[ai].y + positions[aj].y) * 0.5,
+                );
+                let midpoint_b = Point::new(
+                    (positions[bi].x + positions[bj].x) * 0.5,
+                    (positions[bi].y + positions[bj].y) * 0.5,
+                );
+                let mut dx = midpoint_b.x - midpoint_a.x;
+                let mut dy = midpoint_b.y - midpoint_a.y;
+                if dx.hypot(dy) < 1e-7 {
+                    dx = -(positions[aj].y - positions[ai].y);
+                    dy = positions[aj].x - positions[ai].x;
+                    let length = dx.hypot(dy).max(1e-7);
+                    dx /= length;
+                    dy /= length;
+                }
+                let distance2 = dx * dx + dy * dy + 64.0;
+                let strength = self.config.crossing_weight * self.repulsion_scale * 4.0;
+                cost += strength / distance2;
+                let gx = strength * dx / (distance2 * distance2);
+                let gy = strength * dy / (distance2 * distance2);
+                add_node_gradient(&self.free_slot, &mut gradient, ai, gx, gy);
+                add_node_gradient(&self.free_slot, &mut gradient, aj, gx, gy);
+                add_node_gradient(&self.free_slot, &mut gradient, bi, -gx, -gy);
+                add_node_gradient(&self.free_slot, &mut gradient, bj, -gx, -gy);
             }
         }
 
@@ -266,10 +319,31 @@ impl CompiledProblem {
             let weight = 1e-5;
             cost += weight * (cx * cx + cy * cy);
             if let Some(g) = gradient {
-                for slot in self.free_slot.iter().flatten() {
+                for (index, slot) in self
+                    .free_slot
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, slot)| slot.map(|slot| (index, slot)))
+                {
                     g[2 * slot] += 2.0 * weight * cx / positions.len() as f64;
                     g[2 * slot + 1] += 2.0 * weight * cy / positions.len() as f64;
+                    // A weak gravitational well bounds disconnected components;
+                    // pair repulsion alone has no finite minimum for them.
+                    let compactness = 1e-5;
+                    cost += compactness
+                        * (positions[index].x * positions[index].x
+                            + positions[index].y * positions[index].y);
+                    g[2 * slot] += 2.0 * compactness * positions[index].x;
+                    g[2 * slot + 1] += 2.0 * compactness * positions[index].y;
                 }
+            } else {
+                let compactness = 1e-5;
+                cost += positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| self.free_slot[*index].is_some())
+                    .map(|(_, point)| compactness * (point.x * point.x + point.y * point.y))
+                    .sum::<f64>();
             }
         }
         cost
@@ -315,6 +389,23 @@ fn add_pair_gradient(
         g[2 * slot] += target_x;
         g[2 * slot + 1] += target_y;
     }
+}
+
+fn add_node_gradient(
+    slots: &[Option<usize>],
+    gradient: &mut Option<&mut DVector<f64>>,
+    node: usize,
+    x: f64,
+    y: f64,
+) {
+    let Some(slot) = slots[node] else {
+        return;
+    };
+    let Some(g) = gradient.as_deref_mut() else {
+        return;
+    };
+    g[2 * slot] += x;
+    g[2 * slot + 1] += y;
 }
 
 trait StableSign {

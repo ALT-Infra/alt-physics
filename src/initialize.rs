@@ -98,7 +98,12 @@ pub(crate) fn initialize(problem: &CompiledProblem) -> Vec<Point> {
 }
 
 fn separate_components(problem: &CompiledProblem, positions: &mut [Point]) {
-    if positions.len() < 2 || problem.nodes.iter().any(|node| matches!(node.pin, Pin::Fixed(_))) {
+    if positions.len() < 2
+        || problem
+            .nodes
+            .iter()
+            .any(|node| matches!(node.pin, Pin::Fixed(_)))
+    {
         return;
     }
     let mut union = UnionFind::new(positions.len());
@@ -109,7 +114,9 @@ fn separate_components(problem: &CompiledProblem, positions: &mut [Point]) {
     for index in 0..positions.len() {
         components.entry(union.find(index)).or_default().push(index);
     }
-    if components.len() <= 1 { return; }
+    if components.len() <= 1 {
+        return;
+    }
     let mut groups: Vec<_> = components.into_values().collect();
     groups.sort_by_key(|group| group.iter().map(|&index| problem.nodes[index].id).min());
     let mut cursor = 0.0;
@@ -123,11 +130,15 @@ fn separate_components(problem: &CompiledProblem, positions: &mut [Point]) {
             .map(|&index| positions[index].x + problem.nodes[index].size.width * 0.5)
             .fold(f64::NEG_INFINITY, f64::max);
         let shift = cursor - left;
-        for index in group { positions[index].x += shift; }
+        for index in group {
+            positions[index].x += shift;
+        }
         cursor += right - left + problem.config.component_gap;
     }
     let center = positions.iter().map(|point| point.x).sum::<f64>() / positions.len() as f64;
-    for point in positions { point.x -= center; }
+    for point in positions {
+        point.x -= center;
+    }
 }
 
 fn deterministic_unit(mut value: u64) -> f64 {
