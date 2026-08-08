@@ -5,6 +5,8 @@ use crate::{
     Edge, EdgeId, NodeId, NodePlacement, Point, Port, Route, Side,
 };
 
+type ResolvedPorts = BTreeMap<(EdgeId, bool), Option<(Side, Option<f64>)>>;
+
 pub(crate) fn route_edges(
     edges: &[Edge],
     placements: &BTreeMap<NodeId, NodePlacement>,
@@ -61,10 +63,7 @@ pub(crate) fn route_edges(
 /// monotonically ordered boundary positions prevent incident routes from
 /// leaving a node on top of one another and realize the local two-layer
 /// crossing minimum at each rectangle boundary.
-fn resolve_ports(
-    edges: &[Edge],
-    placements: &BTreeMap<NodeId, NodePlacement>,
-) -> BTreeMap<(EdgeId, bool), Option<(Side, Option<f64>)>> {
+fn resolve_ports(edges: &[Edge], placements: &BTreeMap<NodeId, NodePlacement>) -> ResolvedPorts {
     #[derive(Clone, Copy)]
     struct Endpoint {
         edge: EdgeId,
